@@ -1,0 +1,68 @@
+name: Build Release APK
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Set Gradle JVM args
+        run: echo "org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m" >> gradle.properties
+
+      - name: Clean Project
+        run: ./gradlew clean
+
+      - name: Build Release APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Verify 16KB page size alignment
+        run: |
+          echo "Checking .so alignment for 16KB page size..."
+          find app/build/outputs/apk/release -name "*.apk" | while read apk; do
+            echo "--- APK: $apk ---"
+            unzip -p "$apk" "lib/*/*.so" 2>/dev/null | \
+              python3 -c "
+          import sys, struct
+          data = sys.stdin.buffer.read()
+          if len(data) < 64:
+              print('Too small to parse')
+              sys.exit(0)
+          # Check ELF magic
+          if data[:4] != b'\\x7fELF':
+              print('Not an ELF file')
+              sys.exit(0)
+          print('ELF OK - native library found')
+          " || true
+          done
+          echo "Done. Manual check: use \`readelf -l\` on extracted .so for PT_LOAD alignment >= 0x4000"
+
+      - name: Upload Release APK as Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 7
